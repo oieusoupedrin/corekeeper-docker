@@ -1,75 +1,170 @@
-
 FROM debian:bullseye-slim as build-env
-# ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
+# ARG TESTS
+ARG SOURCE_COMMIT
+ARG BUSYBOX_VERSION=1.34.1
 ARG SUPERVISOR_VERSION=4.2.4
-ADD . .
+
 RUN apt-get update
-# RUN apt-get -y install apt-utils
-# RUN apt-get -y install build-essential curl git python3 python3-pip golang shellcheck
+RUN apt-get -y install apt-utils
+RUN apt-get -y install build-essential curl git python3 python3-pip golang shellcheck
 
-# WORKDIR /build
-# RUN git clone https://github.com/Yepoleb/python-a2s.git \
-#     && cd python-a2s \
-#     && python3 setup.py bdist --format=gztar
+WORKDIR /build/busybox
+RUN curl -L -o /tmp/busybox.tar.bz2 https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2 \
+    && tar xjvf /tmp/busybox.tar.bz2 --strip-components=1 -C /build/busybox \
+    && make defconfig \
+    && sed -i -e "s/^CONFIG_FEATURE_SYSLOGD_READ_BUFFER_SIZE=.*/CONFIG_FEATURE_SYSLOGD_READ_BUFFER_SIZE=2048/" .config \
+    && make \
+    && cp busybox /usr/local/bin/
 
-# WORKDIR /build/supervisor
-# RUN curl -L -o /tmp/supervisor.tar.gz https://github.com/Supervisor/supervisor/archive/${SUPERVISOR_VERSION}.tar.gz \
-#     && tar xzvf /tmp/supervisor.tar.gz --strip-components=1 -C /build/supervisor \
-#     && python3 setup.py bdist --format=gztar
+WORKDIR /build/env2cfg
+COPY ./env2cfg/ /build/env2cfg/
+RUN if [ "${TESTS:-true}" = true ]; then \
+        pip3 install tox \
+        && tox \
+        ; \
+    fi
+RUN python3 setup.py bdist --format=gztar
 
-RUN cat README.md
-COPY README.md /build/
-RUN cat /build/README.md
-RUN echo "teste"
-# FROM ubuntu:latest
+WORKDIR /build
+RUN git clone https://github.com/Yepoleb/python-a2s.git \
+    && cd python-a2s \
+    && python3 setup.py bdist --format=gztar
 
-# LABEL maintainer="eusouoPedrin"
-# ARG PUID=1000
+WORKDIR /build/supervisor
+RUN curl -L -o /tmp/supervisor.tar.gz https://github.com/Supervisor/supervisor/archive/${SUPERVISOR_VERSION}.tar.gz \
+    && tar xzvf /tmp/supervisor.tar.gz --strip-components=1 -C /build/supervisor \
+    && python3 setup.py bdist --format=gztar
 
-# ENV USER steam
+# copiar os scripts
+COPY bootstrap /usr/local/sbin/
+COPY corekeeper-status /usr/local/bin/
+COPY corekeeper-backup /usr/local/bin/corekeeper-backup 
+COPY corekeeper-is-idle /usr/local/bin/corekeeper-is-idle 
+COPY corekeeper-bootstrap /usr/local/bin/corekeeper-bootstrap
+COPY corekeeper-server /usr/local/bin/corekeeper-server 
+COPY corekeeper-updater /usr/local/bin/corekeeper-updater
 
-# RUN apt-get update \
-#     && apt-get -y install software-properties-common
+RUN chmod 755 /usr/local/sbin/bootstrap /usr/local/bin/corekeeper-*
+# RUN if [ "${TESTS:-true}" = true ]; then \
+#         shellcheck -a -x -s bash -e SC2034 \
+#             /usr/local/sbin/bootstrap \
+#             /usr/local/bin/corekeeper-backup \
+#             /usr/local/bin/corekeeper-is-idle \
+#             /usr/local/bin/corekeeper-bootstrap \
+#             /usr/local/bin/corekeeper-server \
+#             /usr/local/bin/corekeeper-updater \
+#             /usr/local/share/corekeeper/contrib/*.sh \
+#         ; \
+#     fi
+WORKDIR /
+RUN rm -rf /usr/local/lib/
+RUN tar xzvf /build/supervisor/dist/supervisor-*.linux-x86_64.tar.gz
+RUN tar xzvf /build/env2cfg/dist/env2cfg-*.linux-x86_64.tar.gz
+RUN tar xzvf /build/python-a2s/dist/python-a2s-*.linux-x86_64.tar.gz
+# copiar supervisor conf
+# COPY supervisord.conf /usr/local/etc/supervisord.conf
+RUN mkdir -p /usr/local/etc/supervisor/conf.d/ \
+    && chmod 640 /usr/local/etc/supervisord.conf
+RUN echo "${SOURCE_COMMIT:-unknown}" > /usr/local/etc/git-commit.HEAD
 
-# RUN apt-get -y install apt-utils
-
-# RUN dpkg --add-architecture i386 \
-#     && apt-get update \
-#     && apt-get install -y --no-install-recommends --no-install-suggests \
-#         apt-utils \
-#         sudo \
-#         ufw \
-#         wget \
-#         vim \
-#         curl 
-
-# # cria o user com a senha gerada com
-# # perl -e 'print crypt("password", "salt"), "\n"'
-
-# RUN useradd -u "${PUID}" -m -p "sa3tHJ3/KuYvI" "${USER}" \
-#     && usermod -aG sudo steam \
-#     && sudo -u steam -s \
-#     && cd /home/steam 
-
-
-# USER steam
-
-# RUN mkdir -p /home/steam/.config/unity3d/Pugstorm/Core\ Keeper/DedicatedServer/ \
-#     && mkdir /home/steam/Steam/steamapps/common/Core\ Keeper\ Dedicated\ Server/
-
-# RUN echo "password" | sudo -S apt-get update \
-#     && echo steam steam/question select "I AGREE" | sudo debconf-set-selections  \
-#     && echo steam steam/license note '' | sudo debconf-set-selections\
-#     && sudo apt-get -y install steamcmd \
-#         lib32gcc-s1 \
-#     && sudo ln -s /usr/games/steamcmd /home/steam/steamcmd \
-#     && cd /home/steam \
-#     && ./steamcmd +login anonymous +app_update 1007 +app_update 1963720 +quit 
+# installs i386 libraries
+FROM --platform=linux/386 debian:buster-slim as i386-libs
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get -y --no-install-recommends install \
+        libc6-dev \
+        libstdc++6 \
+        libsdl2-2.0-0 \
+        libcurl4 \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 
+FROM debian:bullseye-slim
+ENV DEBIAN_FRONTEND=noninteractive
+COPY --from=build-env /usr/local/ /usr/local/
+COPY --from=i386-libs /lib/ld-linux.so.2 /lib/ld-linux.so.2
+COPY --from=i386-libs /lib/i386-linux-gnu /lib/i386-linux-gnu
+COPY --from=i386-libs /usr/lib/i386-linux-gnu /usr/lib/i386-linux-gnu
+# COPY fake-supervisord /usr/bin/supervisord
 
+RUN groupadd -g "${PGID:-0}" -o corekeeper \
+    && useradd -g "${PGID:-0}" -u "${PUID:-0}" -o --create-home corekeeper \
+    && apt-get update \
+    && apt-get -y --no-install-recommends install apt-utils \
+    && apt-get -y dist-upgrade \
+    && apt-get -y --no-install-recommends install \
+        libc6-dev \
+        libsdl2-2.0-0 \
+        cron \
+        curl \
+        iproute2 \
+        libcurl4 \
+        ca-certificates \
+        procps \
+        locales \
+        unzip \
+        zip \
+        rsync \
+        openssh-client \
+        jq \
+        python3-minimal \
+        python3-pkg-resources \
+        python3-setuptools \
+        libpulse-dev \
+        libatomic1 \
+        libc6 \
+    && echo 'LANG="en_US.UTF-8"' > /etc/default/locale \
+    && echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
+    && rm -f /bin/sh \
+    && ln -s /bin/bash /bin/sh \
+    && locale-gen \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3 1 \
+    && usermod -a -G crontab corekeeper \
+    && apt-get clean \
+    && mkdir -p /var/spool/cron/crontabs /var/log/supervisor /opt/corekeeper /opt/steamcmd /home/corekeeper/.config/unity3d/Pugstorm /config /var/run/corekeeper \
+    && ln -s /config /home/corekeeper/.config/unity3d/Pugstorm/Core\ Keeper/DedicatedServer/ \
+    && ln -s /usr/local/bin/busybox /usr/local/sbin/syslogd \
+    && ln -s /usr/local/bin/busybox /usr/local/sbin/mkpasswd \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/vi \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/patch \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/unix2dos \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/dos2unix \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/makemime \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/xxd \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/wget \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/less \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/lsof \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/httpd \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/ssl_client \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/ip \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/ipcalc \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/ping \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/ping6 \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/iostat \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/setuidgid \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/ftpget \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/ftpput \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/bzip2 \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/xz \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/pstree \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/killall \
+    && ln -s /usr/local/bin/busybox /usr/local/bin/bc \
+    && curl -L -o /tmp/steamcmd_linux.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+    && tar xzvf /tmp/steamcmd_linux.tar.gz -C /opt/steamcmd/ \
+    && chown corekeeper:corekeeper /var/run/corekeeper \
+    && chown -R root:root /opt/steamcmd \
+    && chmod 755 /opt/steamcmd/steamcmd.sh \
+        /opt/steamcmd/linux32/steamcmd \
+        /opt/steamcmd/linux32/steamerrorreporter \
+        /usr/bin/supervisord \
+    && cd "/opt/steamcmd" \
+    && su - corekeeper -c "/opt/steamcmd/steamcmd.sh +login anonymous +quit" \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && date --utc --iso-8601=seconds > /usr/local/etc/build.date
 
-# EXPOSE 27010/udp
-# EXPOSE 27011/udp
-
-# CMD /bin/bash
+EXPOSE 27010-27011/udp
+EXPOSE 9001/tcp
+EXPOSE 80/tcp
+WORKDIR /
+CMD ["/usr/local/sbin/bootstrap"]
