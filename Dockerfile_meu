@@ -1,0 +1,111 @@
+FROM debian:bullseye-slim as build-env
+ARG SUPERVISOR_VERSION=4.2.4
+RUN apt-get update
+RUN apt-get -y install apt-utils
+RUN apt-get -y install build-essential curl git python3 python3-pip golang
+
+WORKDIR /build
+RUN git clone https://github.com/Yepoleb/python-a2s.git \
+    && cd python-a2s \
+    && python3 setup.py bdist --format=gztar
+
+WORKDIR /build/supervisor
+RUN curl -L -o /tmp/supervisor.tar.gz https://github.com/Supervisor/supervisor/archive/${SUPERVISOR_VERSION}.tar.gz \
+    && tar xzvf /tmp/supervisor.tar.gz --strip-components=1 -C /build/supervisor \
+    && python3 setup.py bdist --format=gztar
+
+COPY bootstrap /usr/local/sbin/
+COPY corekeeper-status /usr/local/bin/
+COPY corekeeper-backup /usr/local/bin/
+COPY corekeeper-is-idle /usr/local/bin/ 
+COPY corekeeper-bootstrap /usr/local/bin/
+COPY corekeeper-server /usr/local/bin/ 
+COPY corekeeper-updater /usr/local/bin/
+COPY defaults /usr/local/etc/corekeeper/
+COPY common /usr/local/etc/corekeeper/
+
+WORKDIR /
+RUN rm -rf /usr/local/lib/
+RUN tar xzvf /build/supervisor/dist/supervisor-*.linux-x86_64.tar.gz
+RUN tar xzvf /build/python-a2s/dist/python-a2s-*.linux-x86_64.tar.gz
+# copiar supervisor conf
+COPY supervisord.conf /usr/local/etc/supervisord.conf
+RUN mkdir -p /usr/local/etc/supervisor/conf.d/ \
+    && chmod 640 /usr/local/etc/supervisord.conf
+
+# installs i386 libraries
+FROM --platform=linux/386 debian:buster-slim as i386-libs
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get -y --no-install-recommends install \
+        libc6-dev \
+        libstdc++6 \
+        libsdl2-2.0-0 \
+        libcurl4 \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+
+
+FROM debian:bullseye-slim
+LABEL maintainer="eusouoPedrin"
+ARG PUID=1000
+COPY --from=build-env /usr/local/ /usr/local/
+COPY --from=i386-libs /lib/ld-linux.so.2 /lib/ld-linux.so.2
+COPY --from=i386-libs /lib/i386-linux-gnu /lib/i386-linux-gnu
+COPY --from=i386-libs /usr/lib/i386-linux-gnu /usr/lib/i386-linux-gnu
+
+ENV USER steam
+
+RUN apt-get update \
+    && apt-get -y install software-properties-common
+
+RUN apt-get -y install apt-utils
+
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends --no-install-suggests \
+        apt-utils \
+        ufw \
+        wget \
+        vim \
+        curl 
+
+# cria o user com a senha gerada com
+# perl -e 'print crypt("password", "salt"), "\n"'
+
+# RUN useradd -u "${PUID}" -m -p "sa3tHJ3/KuYvI" "${USER}" \
+#     && usermod -aG sudo steam \
+#     && sudo -u steam -s \
+#     && cd /home/steam 
+
+
+# USER steam
+
+# RUN echo "password" | sudo -S apt-get update \
+#     && mkdir -p /home/steam/.config/unity3d/Pugstorm/Core\ Keeper/DedicatedServer/ \
+#     && mkdir -p /home/steam/app/corekeeper /home/steam/steamcmd \  
+#     && mkdir -p /home/steam/Steam/steamapps/common/Core\ Keeper\ Dedicated\ Server/
+
+
+COPY ./scripts/bootstrap.sh /home/corekeeper/
+
+# # RUN echo "password" | sudo -S apt-get update \
+# #     && echo steam steam/question select "I AGREE" | sudo debconf-set-selections  \
+# #     && echo steam steam/license note '' | sudo debconf-set-selections\
+#     # && sudo apt-get -y install steamcmd \
+#     #     lib32gcc-s1 \
+    
+# RUN echo "password" | sudo -S apt-get -y install lib32gcc-s1 \
+#     && curl -L -o /tmp/steamcmd_linux.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+#     && sudo tar xzvf /tmp/steamcmd_linux.tar.gz -C /home/steam/steamcmd/ \
+#     && sudo ln -s /home/steam/steamcmd/steamcmd.sh /home/steam/steamcmd.sh \
+#     && cd /home/steam \
+#     && sudo ./steamcmd.sh +login anonymous +app_update 1007 +quit 
+
+#  +app_update 1963720 corekeeper
+
+
+EXPOSE 27010/udp
+EXPOSE 27011/udp
+
+CMD /home/steam/bootstrap.sh
