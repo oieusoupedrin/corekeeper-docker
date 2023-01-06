@@ -23,37 +23,13 @@ RUN git clone https://github.com/Yepoleb/python-a2s.git \
     && cd python-a2s \
     && python3 setup.py bdist --format=gztar
 
-WORKDIR /build/supervisor
-RUN curl -L -o /tmp/supervisor.tar.gz https://github.com/Supervisor/supervisor/archive/${SUPERVISOR_VERSION}.tar.gz \
-    && tar xzvf /tmp/supervisor.tar.gz --strip-components=1 -C /build/supervisor \
-    && python3 setup.py bdist --format=gztar
-
 # copiar os scripts
-COPY bootstrap /usr/local/sbin/
-COPY script.sh /usr/local/sbin/
-COPY corekeeper-status /usr/local/bin/
-COPY corekeeper-backup /usr/local/bin/
-COPY corekeeper-is-idle /usr/local/bin/ 
-COPY corekeeper-bootstrap /usr/local/bin/
-COPY corekeeper-server /usr/local/bin/ 
-COPY corekeeper-updater /usr/local/bin/
 COPY defaults /usr/local/etc/corekeeper/
-COPY common /usr/local/etc/corekeeper/
 
-RUN chmod 755 /usr/local/sbin/bootstrap /usr/local/bin/corekeeper-*
-# RUN if [ "${TESTS:-true}" = true ]; then \
-#         shellcheck -a -x -s bash -e SC2034 \
-#             /usr/local/sbin/bootstrap \
-#         ; \
-#     fi
 WORKDIR /
 RUN rm -rf /usr/local/lib/
-RUN tar xzvf /build/supervisor/dist/supervisor-*.linux-x86_64.tar.gz
 RUN tar xzvf /build/python-a2s/dist/python-a2s-*.linux-x86_64.tar.gz
 # copiar supervisor conf
-COPY supervisord.conf /usr/local/etc/supervisord.conf
-RUN mkdir -p /usr/local/etc/supervisor/conf.d/ \
-    && chmod 640 /usr/local/etc/supervisord.conf
 RUN echo "${SOURCE_COMMIT:-unknown}" > /usr/local/etc/git-commit.HEAD
 
 # installs i386 libraries
@@ -74,7 +50,6 @@ COPY --from=build-env /usr/local/ /usr/local/
 COPY --from=i386-libs /lib/ld-linux.so.2 /lib/ld-linux.so.2
 COPY --from=i386-libs /lib/i386-linux-gnu /lib/i386-linux-gnu
 COPY --from=i386-libs /usr/lib/i386-linux-gnu /usr/lib/i386-linux-gnu
-COPY fake-supervisord /usr/bin/supervisord
 COPY ./scripts/bootstrap.sh /home/corekeeper/
 
 RUN groupadd -g "${PGID:-0}" -o corekeeper \
@@ -113,7 +88,7 @@ RUN groupadd -g "${PGID:-0}" -o corekeeper \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3 1 \
     && usermod -a -G crontab corekeeper \
     && apt-get clean \
-    && mkdir -p /var/spool/cron/crontabs /var/log/supervisor /opt/corekeeper /opt/steamcmd /home/corekeeper/.config/unity3d/Pugstorm/Core\ Keeper/DedicatedServer /config /var/run/corekeeper \
+    && mkdir -p /var/spool/cron/crontabs /opt/corekeeper /opt/steamcmd /home/corekeeper/.config/unity3d/Pugstorm/Core\ Keeper/DedicatedServer /config /var/run/corekeeper \
     && ln -s /config /home/corekeeper/.config/unity3d/Pugstorm/Core\ Keeper/DedicatedServer/ \
     && ln -s /usr/local/bin/busybox /usr/local/sbin/syslogd \
     && ln -s /usr/local/bin/busybox /usr/local/sbin/mkpasswd \
@@ -149,7 +124,6 @@ RUN groupadd -g "${PGID:-0}" -o corekeeper \
         /opt/steamcmd/linux32/steamcmd \
         /opt/steamcmd/linux32/steamerrorreporter \
         /usr/local/sbin \
-        /usr/bin/supervisord \
     && cd "/opt/steamcmd" \
     && su - corekeeper -c "/opt/steamcmd/steamcmd.sh +login anonymous +quit" \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
@@ -157,9 +131,7 @@ RUN groupadd -g "${PGID:-0}" -o corekeeper \
 
 
 
-EXPOSE 27010-27011/udp
-EXPOSE 9001/tcp
-EXPOSE 80/tcp
+EXPOSE 27010-27015/udp
 WORKDIR /
 CMD /home/corekeeper/bootstrap.sh
 
